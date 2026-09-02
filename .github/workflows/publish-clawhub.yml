@@ -1,0 +1,123 @@
+# 推 vX.Y.Z tag 自动发布到 ClawHub。
+# 需要仓库 secret：CLAWHUB_TOKEN（用 `npx clawhub token` 取，再 `gh secret set CLAWHUB_TOKEN`）
+name: Publish to ClawHub
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  SKILL_PATH: skills/agent-constraints
+  SKILL_SLUG: agent-constraints
+  SKILL_NAME: Agent Constraints
+  VERSION_FILE: skills/agent-constraints/VERSION
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # actions/checkout 会先拉真 tag，再用 commit sha 覆盖 refs/tags/<tag>，
+      # 把 annotated tag 降级成 lightweight tag，导致下面取到的 changelog
+      # 静默变成 commit message 而不是 tag annotation。必须重新拉一次。
+      - name: Restore annotated tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+
+      # 三方一致性：tag / VERSION 文件 / 稍后 dry-run 回报的版本
+      # 任何一方对不上就停，不要发出一个自己都说不清版本号的包。
+      - name: Version consistency (tag vs VERSION file)
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${TAG#v}"
+          FILE_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
+          echo "tag=${TAG_VERSION}  ${VERSION_FILE}=${FILE_VERSION}"
+          if [ "${TAG_VERSION}" != "${FILE_VERSION}" ]; then
+            echo "::error::版本不一致：tag ${TAG_VERSION} != ${VERSION_FILE} ${FILE_VERSION}"
+            exit 1
+          fi
+          echo "VERSION=${TAG_VERSION}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Auth
+        run: npx -y clawhub login --token "${{ secrets.CLAWHUB_TOKEN }}"
+
+      # 完整性门：ClawHub 会静默丢弃隐藏路径和符号链接，
+      # 文件数对不上是包被截断的唯一信号。
+      # 本地数量必须现算——写死常量的话，bundle 增删文件后没人会记得同步改。
+      - name: Dry-run integrity gate
+        run: |
+          set -euo pipefail
+          LOCAL_COUNT="$(find "${SKILL_PATH}" -type f | wc -l | tr -d ' ')"
+          npx -y clawhub publish "${SKILL_PATH}" \
+            --slug "${SKILL_SLUG}" --name "${SKILL_NAME}" --version "${VERSION}" \
+            --dry-run --json > dry.json
+          cat dry.json
+          REMOTE_COUNT="$(jq -r '.fileCount' dry.json)"
+          DRY_VERSION="$(jq -r '.version' dry.json)"
+          echo "本地 ${LOCAL_COUNT} / dry-run ${REMOTE_COUNT}"
+          if [ "${LOCAL_COUNT}" != "${REMOTE_COUNT}" ]; then
+            echo "::error::文件数不一致，包被截断：本地 ${LOCAL_COUNT} != dry-run ${REMOTE_COUNT}"
+            exit 1
+          fi
+          if [ "${DRY_VERSION}" != "${VERSION}" ]; then
+            echo "::error::dry-run 版本 ${DRY_VERSION} != tag ${VERSION}"
+            exit 1
+          fi
+
+      # 单次 publish。不要在此之后再手工发一次同版本——会形成第二次发布尝试。
+      - name: Publish
+        run: |
+          set -euo pipefail
+          CHANGELOG="$(git tag -l --format='%(contents)' "${TAG}")"
+          [ -n "${CHANGELOG}" ] || CHANGELOG="Release ${TAG}"
+          npx -y clawhub publish "${SKILL_PATH}" \
+            --slug "${SKILL_SLUG}" --name "${SKILL_NAME}" --version "${VERSION}" \
+            --source-repo "${GITHUB_REPOSITORY}" \
+            --source-commit "${GITHUB_SHA}" \
+            --source-ref "${TAG}" \
+            --source-path "${SKILL_PATH}" \
+            --changelog "${CHANGELOG}" \
+            --tags latest \
+            --json | tee publish.json
+          jq -e '.ok == true' publish.json > /dev/null
+
+      # 转公开是 ClawHub 侧的异步过程，观测到过几分钟到 50 分钟以上。
+      # 没转公开不判失败，只告警；转公开了就逐路径核对。
+      # 按路径比，不按文件数比——ClawHub 会给已发布版本额外生成元数据文件，
+      # 两个接口的口径本来就不一样。
+      - name: Confirm publication
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/verify && cd /tmp/verify
+          for i in 1 2 3 4 5 6; do
+            if npx -y clawhub install "${SKILL_SLUG}" >/dev/null 2>&1; then
+              echo "已转公开（第 ${i} 次探测）"
+              DST="$(find . -type d -name "${SKILL_SLUG}" | head -1)"
+              MISSING=0
+              while IFS= read -r rel; do
+                if [ ! -f "${DST}/${rel}" ]; then
+                  echo "::error::缺失文件：${rel}"
+                  MISSING=1
+                fi
+              done < <(cd "${GITHUB_WORKSPACE}/${SKILL_PATH}" && find . -type f | sed 's|^\./||')
+              [ "${MISSING}" = "0" ] || exit 1
+              echo "逐路径核对通过"
+              exit 0
+            fi
+            echo "尚未转公开，等 60s（${i}/6）"
+            sleep 60
+          done
+          echo "::warning::6 分钟内未转公开。发布已受理，ClawHub 侧异步处理中，不判失败。"
