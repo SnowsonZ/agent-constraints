@@ -1,138 +1,176 @@
-# 推 vX.Y.Z tag 自动发布到 ClawHub。
-# 需要仓库 secret：CLAWHUB_TOKEN（用 `npx clawhub token` 取，再 `gh secret set CLAWHUB_TOKEN`）
 name: Publish to ClawHub
 
+# 推 vX.Y.Z tag 才会更新 ClawHub 条目；推 tag 本身不会。
+# 本 workflow 是把 tag 变成已发布版本的唯一途径。
+# 需要仓库 secret：CLAWHUB_TOKEN（`npx clawhub token` 取，`gh secret set` 设）
+#
+# 基于 publish-skill 的官方模板，两处本仓库特有的偏离：
+#   1. CLI 版本钉死而非 @latest —— 本仓库实际踩过浮动版本的坑：
+#      CI 曾解析到缺少 --dry-run/--json/--source-* 的旧版，完整性门直接无法执行。
+#   2. 增加 --source-* 溯源参数 —— 让 ClawHub 条目链回具体 commit。
 on:
   push:
-    tags: ["v*.*.*"]
+    tags:
+      - "v*.*.*"
 
 permissions:
   contents: read
+
+concurrency:
+  # 发布是外部副作用：按 tag 排队，绝不在发布中途取消。
+  group: publish-clawhub-${{ github.ref_name }}
+  cancel-in-progress: false
 
 env:
   SKILL_PATH: skills/agent-constraints
   SKILL_SLUG: agent-constraints
   SKILL_NAME: Agent Constraints
-  VERSION_FILE: skills/agent-constraints/VERSION
-  # 钉死 CLI 版本。npx -y clawhub 不锁版本，CI 曾解析到缺少 --dry-run/--json/
-  # --source-* 的旧版，导致完整性门无法执行。发布流水线不能依赖浮动版本。
-  CLAWHUB_CLI_VERSION: "0.23.3"
+  VERSION_FILE: VERSION
+  VERSION_API: https://clawhub.ai/api/v1/skills/agent-constraints/versions
+  CLAWHUB_CLI: clawhub@0.23.3
+  # 转公开是 ClawHub 侧的异步过程，观测到过几分钟到 50 分钟以上。
+  CONFIRM_ATTEMPTS: 10
+  CONFIRM_INTERVAL: 30
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the tag
+        uses: actions/checkout@v4
         with:
+          # 缺这两项则拿不到 annotated tag 对象，changelog 会静默退化。
           fetch-depth: 0
+          fetch-tags: true
 
-      # actions/checkout 会先拉真 tag，再用 commit sha 覆盖 refs/tags/<tag>，
-      # 把 annotated tag 降级成 lightweight tag，导致下面取到的 changelog
-      # 静默变成 commit message 而不是 tag annotation。必须重新拉一次。
-      - name: Restore annotated tag
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
-          echo "TAG=${TAG}" >> "$GITHUB_ENV"
-
-      # 三方一致性：tag / VERSION 文件 / 稍后 dry-run 回报的版本
-      # 任何一方对不上就停，不要发出一个自己都说不清版本号的包。
-      - name: Version consistency (tag vs VERSION file)
-        run: |
-          set -euo pipefail
-          TAG_VERSION="${TAG#v}"
-          FILE_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
-          echo "tag=${TAG_VERSION}  ${VERSION_FILE}=${FILE_VERSION}"
-          if [ "${TAG_VERSION}" != "${FILE_VERSION}" ]; then
-            echo "::error::版本不一致：tag ${TAG_VERSION} != ${VERSION_FILE} ${FILE_VERSION}"
-            exit 1
-          fi
-          echo "VERSION=${TAG_VERSION}" >> "$GITHUB_ENV"
-
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Auth
+      - name: Require agreement between tag and skill version
         run: |
-          set -euo pipefail
-          echo "clawhub CLI: $(npx -y clawhub@${CLAWHUB_CLI_VERSION} --cli-version)"
-          npx -y clawhub@${CLAWHUB_CLI_VERSION} login --token "${{ secrets.CLAWHUB_TOKEN }}"
+          set -eu
+          tag=$GITHUB_REF_NAME
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            printf 'tag %s is not vX.Y.Z\n' "$tag" >&2
+            exit 1
+          }
+          version=${tag#v}
+          skill_version=$(tr -d '\r\n' < "$SKILL_PATH/$VERSION_FILE")
+          [ "$skill_version" = "$version" ] || {
+            printf 'skill version file reports %s, tag says %s\n' "$skill_version" "$version" >&2
+            exit 1
+          }
+          # actions/checkout 会用 commit sha 覆盖 refs/tags/<tag>，把 annotated tag
+          # 降级成 lightweight tag，changelog 于是静默变成 commit subject。取回真 tag。
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag" >/dev/null 2>&1 || true
+          changelog=$(git tag -l --format='%(contents:subject)' "$tag" || true)
+          [ -n "$changelog" ] || changelog="Release $version"
+          printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'CHANGELOG=%s\n' "$changelog" >> "$GITHUB_ENV"
 
-      # 完整性门：ClawHub 会静默丢弃隐藏路径和符号链接，
-      # 文件数对不上是包被截断的唯一信号。
-      # 本地数量必须现算——写死常量的话，bundle 增删文件后没人会记得同步改。
-      - name: Dry-run integrity gate
+      - name: Log in to ClawHub
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          LOCAL_COUNT="$(find "${SKILL_PATH}" -type f | wc -l | tr -d ' ')"
-          npx -y clawhub@${CLAWHUB_CLI_VERSION} publish "${SKILL_PATH}" \
-            --slug "${SKILL_SLUG}" --name "${SKILL_NAME}" --version "${VERSION}" \
-            --dry-run --json > dry.json
-          cat dry.json
-          REMOTE_COUNT="$(jq -r '.fileCount' dry.json)"
-          DRY_VERSION="$(jq -r '.version' dry.json)"
-          echo "本地 ${LOCAL_COUNT} / dry-run ${REMOTE_COUNT}"
-          if [ "${LOCAL_COUNT}" != "${REMOTE_COUNT}" ]; then
-            echo "::error::文件数不一致，包被截断：本地 ${LOCAL_COUNT} != dry-run ${REMOTE_COUNT}"
+          set -eu
+          [ -n "${CLAWHUB_TOKEN:-}" ] || {
+            printf 'CLAWHUB_TOKEN secret is not configured\n' >&2
             exit 1
-          fi
-          if [ "${DRY_VERSION}" != "${VERSION}" ]; then
-            echo "::error::dry-run 版本 ${DRY_VERSION} != tag ${VERSION}"
-            exit 1
-          fi
+          }
+          printf 'clawhub CLI: %s\n' "$(npx --yes "$CLAWHUB_CLI" --cli-version)"
+          npx --yes "$CLAWHUB_CLI" login --token "$CLAWHUB_TOKEN" >/dev/null
+          npx --yes "$CLAWHUB_CLI" whoami
 
-      # 单次 publish。不要在此之后再手工发一次同版本——会形成第二次发布尝试。
+      - name: Dry-run gate
+        run: |
+          set -eu
+          # 期望文件数必须从 bundle 现算。写死常量的话，bundle 增删文件后
+          # 没人会记得同步改，那个数字迟早会说谎。
+          expected_count=$(find "$SKILL_PATH" -type f | wc -l | tr -d ' ')
+          npx --yes "$CLAWHUB_CLI" skill publish "$SKILL_PATH" \
+            --slug "$SKILL_SLUG" --name "$SKILL_NAME" \
+            --version "$VERSION" --changelog "$CHANGELOG" \
+            --source-repo "$GITHUB_REPOSITORY" \
+            --source-commit "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF_NAME" \
+            --source-path "$SKILL_PATH" \
+            --dry-run --json > dry-run.json || {
+            # 保留 CLI 的 JSON body：里面有服务端消息和 attempt id，
+            # 是决定下一步怎么做的依据。
+            cat dry-run.json
+            exit 1
+          }
+          cat dry-run.json
+          jq -e --arg v "$VERSION" --argjson n "$expected_count" \
+            '.status == "would-publish" and .version == $v and .fileCount == $n' \
+            dry-run.json > /dev/null || {
+            printf 'dry-run did not report would-publish for %s with %s files\n' \
+              "$VERSION" "$expected_count" >&2
+            # ClawHub 会静默丢弃隐藏路径和符号链接。
+            # 文件数对不上是包被截断的唯一信号。
+            exit 1
+          }
+
       - name: Publish
         run: |
-          set -euo pipefail
-          CHANGELOG="$(git tag -l --format='%(contents)' "${TAG}")"
-          [ -n "${CHANGELOG}" ] || CHANGELOG="Release ${TAG}"
-          npx -y clawhub@${CLAWHUB_CLI_VERSION} publish "${SKILL_PATH}" \
-            --slug "${SKILL_SLUG}" --name "${SKILL_NAME}" --version "${VERSION}" \
-            --source-repo "${GITHUB_REPOSITORY}" \
-            --source-commit "${GITHUB_SHA}" \
-            --source-ref "${TAG}" \
-            --source-path "${SKILL_PATH}" \
-            --changelog "${CHANGELOG}" \
+          set -eu
+          # 只跑一次。此处重试会为一个注册表可能已受理的版本再造一次发布尝试。
+          npx --yes "$CLAWHUB_CLI" skill publish "$SKILL_PATH" \
+            --slug "$SKILL_SLUG" --name "$SKILL_NAME" \
+            --version "$VERSION" --changelog "$CHANGELOG" \
+            --source-repo "$GITHUB_REPOSITORY" \
+            --source-commit "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF_NAME" \
+            --source-path "$SKILL_PATH" \
             --tags latest \
-            --json | tee publish.json
-          jq -e '.ok == true' publish.json > /dev/null
+            --json > publish.json || {
+            cat publish.json
+            exit 1
+          }
+          cat publish.json
+          jq -e '.status == "pending-publication" or .status == "published"' \
+            publish.json > /dev/null || {
+            printf 'publish returned an unrecognised status; check publish.json before retrying\n' >&2
+            exit 1
+          }
 
-      # 转公开是 ClawHub 侧的异步过程，观测到过几分钟到 50 分钟以上。
-      # 没转公开不判失败，只告警；转公开了就逐路径核对。
-      # 按路径比，不按文件数比——ClawHub 会给已发布版本额外生成元数据文件，
-      # 两个接口的口径本来就不一样。
-      - name: Confirm publication
+      - name: Confirm the exact version is public
         run: |
-          set -euo pipefail
-          mkdir -p /tmp/verify && cd /tmp/verify
-          for i in 1 2 3 4 5 6; do
-            # 必须带 --version 指定本次发布的版本。装裸 slug 拿到的是当前
-            # latest，转公开前那仍是上一个版本；若两版内容相同，逐路径核对
-            # 会照样通过——那是假阳性，等于什么都没验。
-            if npx -y clawhub@${CLAWHUB_CLI_VERSION} install "${SKILL_SLUG}" \
-                 --version "${VERSION}" --force >/dev/null 2>&1; then
-              echo "已转公开（第 ${i} 次探测）"
-              DST="$(find . -type d -name "${SKILL_SLUG}" | head -1)"
-              GOT="$(tr -d '[:space:]' < "${DST}/VERSION")"
-              if [ "${GOT}" != "${VERSION}" ]; then
-                echo "::error::装回的版本 ${GOT} != 本次发布的 ${VERSION}"
-                exit 1
+          set -eu
+          # pending-publication 意为已受理，不等于已上线。等版本 API，不要再发一次。
+          attempt=0
+          while [ "$attempt" -lt "$CONFIRM_ATTEMPTS" ]; do
+            attempt=$((attempt + 1))
+            code=$(curl -sS -L -o version.json -w '%{http_code}' \
+              "$VERSION_API/$VERSION" 2>/dev/null || echo 000)
+            if [ "$code" = 200 ] &&
+               jq -e --arg v "$VERSION" '.version.version == $v' \
+                 version.json > /dev/null 2>&1; then
+              # ClawHub 会给已发布版本额外生成文件（skill-card.md），
+              # 它的文件数天然比上传数多。所以比路径，不比数量：
+              # 每一个上传过的路径都必须在。
+              jq -r '.version.files[].path' version.json | sort > published.txt
+              ( cd "$SKILL_PATH" && find . -type f | sed 's|^\./||' ) \
+                | sort > uploaded.txt
+              missing=$(comm -23 uploaded.txt published.txt)
+              if [ -z "$missing" ]; then
+                printf '%s is public with all uploaded files present\n' "$VERSION"
+                exit 0
               fi
-              MISSING=0
-              while IFS= read -r rel; do
-                if [ ! -f "${DST}/${rel}" ]; then
-                  echo "::error::缺失文件：${rel}"
-                  MISSING=1
-                fi
-              done < <(cd "${GITHUB_WORKSPACE}/${SKILL_PATH}" && find . -type f | sed 's|^\./||')
-              [ "${MISSING}" = "0" ] || exit 1
-              echo "逐路径核对通过"
-              exit 0
+              printf 'published %s is missing uploaded files:\n%s\n' \
+                "$VERSION" "$missing" >&2
+              exit 1
             fi
-            echo "尚未转公开，等 60s（${i}/6）"
-            sleep 60
+            # 已受理但未转公开时返回 404 纯文本，先判状态码，
+            # 不要把响应体直接喂给 jq。
+            printf 'attempt %s/%s: not public yet (HTTP %s)\n' \
+              "$attempt" "$CONFIRM_ATTEMPTS" "$code"
+            sleep "$CONFIRM_INTERVAL"
           done
-          echo "::warning::6 分钟内未转公开。发布已受理，ClawHub 侧异步处理中，不判失败。"
+          # 实测转公开延迟从几分钟到 50 分钟以上。发布在上一步已被受理，
+          # 转公开慢不是发布失败——明确告警，而不是每次都判红。
+          printf '::warning::%s was accepted but is not public yet after %s attempts; verify later with references/clawhub-cheatsheet.md\n' \
+            "$VERSION" "$CONFIRM_ATTEMPTS"
+          exit 0
