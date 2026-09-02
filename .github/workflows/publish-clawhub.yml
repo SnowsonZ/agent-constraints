@@ -109,9 +109,18 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/verify && cd /tmp/verify
           for i in 1 2 3 4 5 6; do
-            if npx -y clawhub@${CLAWHUB_CLI_VERSION} install "${SKILL_SLUG}" >/dev/null 2>&1; then
+            # 必须带 --version 指定本次发布的版本。装裸 slug 拿到的是当前
+            # latest，转公开前那仍是上一个版本；若两版内容相同，逐路径核对
+            # 会照样通过——那是假阳性，等于什么都没验。
+            if npx -y clawhub@${CLAWHUB_CLI_VERSION} install "${SKILL_SLUG}" \
+                 --version "${VERSION}" --force >/dev/null 2>&1; then
               echo "已转公开（第 ${i} 次探测）"
               DST="$(find . -type d -name "${SKILL_SLUG}" | head -1)"
+              GOT="$(tr -d '[:space:]' < "${DST}/VERSION")"
+              if [ "${GOT}" != "${VERSION}" ]; then
+                echo "::error::装回的版本 ${GOT} != 本次发布的 ${VERSION}"
+                exit 1
+              fi
               MISSING=0
               while IFS= read -r rel; do
                 if [ ! -f "${DST}/${rel}" ]; then
