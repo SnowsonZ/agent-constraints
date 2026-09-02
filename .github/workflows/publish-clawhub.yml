@@ -14,6 +14,9 @@ env:
   SKILL_SLUG: agent-constraints
   SKILL_NAME: Agent Constraints
   VERSION_FILE: skills/agent-constraints/VERSION
+  # 钉死 CLI 版本。npx -y clawhub 不锁版本，CI 曾解析到缺少 --dry-run/--json/
+  # --source-* 的旧版，导致完整性门无法执行。发布流水线不能依赖浮动版本。
+  CLAWHUB_CLI_VERSION: "0.23.3"
 
 jobs:
   publish:
@@ -52,7 +55,10 @@ jobs:
           node-version: "20"
 
       - name: Auth
-        run: npx -y clawhub login --token "${{ secrets.CLAWHUB_TOKEN }}"
+        run: |
+          set -euo pipefail
+          echo "clawhub CLI: $(npx -y clawhub@${CLAWHUB_CLI_VERSION} --cli-version)"
+          npx -y clawhub@${CLAWHUB_CLI_VERSION} login --token "${{ secrets.CLAWHUB_TOKEN }}"
 
       # 完整性门：ClawHub 会静默丢弃隐藏路径和符号链接，
       # 文件数对不上是包被截断的唯一信号。
@@ -61,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           LOCAL_COUNT="$(find "${SKILL_PATH}" -type f | wc -l | tr -d ' ')"
-          npx -y clawhub publish "${SKILL_PATH}" \
+          npx -y clawhub@${CLAWHUB_CLI_VERSION} publish "${SKILL_PATH}" \
             --slug "${SKILL_SLUG}" --name "${SKILL_NAME}" --version "${VERSION}" \
             --dry-run --json > dry.json
           cat dry.json
@@ -83,7 +89,7 @@ jobs:
           set -euo pipefail
           CHANGELOG="$(git tag -l --format='%(contents)' "${TAG}")"
           [ -n "${CHANGELOG}" ] || CHANGELOG="Release ${TAG}"
-          npx -y clawhub publish "${SKILL_PATH}" \
+          npx -y clawhub@${CLAWHUB_CLI_VERSION} publish "${SKILL_PATH}" \
             --slug "${SKILL_SLUG}" --name "${SKILL_NAME}" --version "${VERSION}" \
             --source-repo "${GITHUB_REPOSITORY}" \
             --source-commit "${GITHUB_SHA}" \
@@ -103,7 +109,7 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/verify && cd /tmp/verify
           for i in 1 2 3 4 5 6; do
-            if npx -y clawhub install "${SKILL_SLUG}" >/dev/null 2>&1; then
+            if npx -y clawhub@${CLAWHUB_CLI_VERSION} install "${SKILL_SLUG}" >/dev/null 2>&1; then
               echo "已转公开（第 ${i} 次探测）"
               DST="$(find . -type d -name "${SKILL_SLUG}" | head -1)"
               MISSING=0
