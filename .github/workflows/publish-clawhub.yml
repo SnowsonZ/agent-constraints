@@ -48,6 +48,11 @@ jobs:
         with:
           node-version: "20"
 
+      # 发布是不可撤销的外部副作用，契约测试必须挡在它前面而不只是挡在 PR 上：
+      # tag 可以直接打在没跑过 PR 的 commit 上。
+      - name: Run skill contract tests
+        run: sh tests/run.sh
+
       - name: Require agreement between tag and skill version
         run: |
           set -eu

@@ -1,0 +1,22 @@
+name: Tests
+
+# 这个 workflow 存在的理由就是这个技能自己的教条：
+# 检查器不是执行门。tests/run.sh 躺在仓库里对任何人都没有约束力，
+# 只有接进 push / PR 才算第 1 层。
+# 要真正闭合，还需要在 GitHub 仓库设置里把 contracts 设为 required check——
+# 那一步在 CI 里配不了，见 README「维护」。
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run skill contract tests
+        run: sh tests/run.sh
