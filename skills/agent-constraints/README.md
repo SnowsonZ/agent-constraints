@@ -24,8 +24,7 @@ mkdir -p ~/.claude/skills && cp -r skills/agent-constraints ~/.claude/skills/
 mkdir -p .claude/skills && cp -r skills/agent-constraints .claude/skills/
 ```
 
-验证：新开一个会话，输入 `/agent-constraints`。技能内容进入对话后不会在后续轮次重读，
-所以之后每次改动 `SKILL.md` 都需要新会话才生效。
+验证：输入 `/agent-constraints`。Claude Code 会在当前会话检测 `SKILL.md` 修改；重新调用可加载变更。行为 A/B 仍必须使用新会话，避免旧内容污染对照。
 
 可选：装上会话记录 hook，为定期复盘留数据。装法见 `hooks/README.md`。
 
@@ -75,16 +74,16 @@ mkdir -p .claude/skills && cp -r skills/agent-constraints .claude/skills/
 ## 文件
 
 ```
-SKILL.md                206 行   决策流程 + 四层落地要点（调用时加载）
-LAYER1-ENFORCEMENT.md   164 行   hooks 与权限规则的实际写法
-LAYER2-INSTRUCTIONS.md   80 行   AGENTS.md 写作规范、修剪判定表、反模式
-LAYER3-ONDEMAND.md       80 行   Skill 与 path-scoped rule
-EVIDENCE.md              86 行   支撑数字，自包含
-templates/                       AGENTS.md + CLAUDE.md 模板
-hooks/                           SessionEnd 记录脚本 + 装法
+SKILL.md                决策流程 + 四层落地要点（调用时加载）
+LAYER1-ENFORCEMENT.md   hooks 与权限规则的实际写法
+LAYER2-INSTRUCTIONS.md  AGENTS.md 写作规范、修剪判定表、反模式
+LAYER3-ONDEMAND.md      Skill 与 path-scoped rule
+EVIDENCE.md             支撑数字，自包含
+templates/              AGENTS.md + CLAUDE.md 模板
+hooks/                  SessionEnd 记录脚本 + 装法
 ```
 
-常规使用只付 SKILL.md 的 206 行，其余按需展开。
+常规使用只加载 SKILL.md，其余按需展开。
 
 `LAYER1-ENFORCEMENT.md` 是最实的部分，全部核自官方文档，包含三个**会静默失效**的坑：
 

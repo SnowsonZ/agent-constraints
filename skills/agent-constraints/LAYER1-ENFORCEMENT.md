@@ -4,6 +4,8 @@ hooks 与权限规则由客户端强制执行，与模型的决定无关。**凡
 
 以下语法均取自 Claude Code 官方文档。其他 agent 的机制不同，不要照搬。
 
+**检查器不是执行门。** linter、formatter、类型系统和测试只有接入 CI required check、pre-commit、PostToolUse 或 Stop hook 后，才构成第 1 层约束。单独存在的配置只能判定结果，不能保证它会被运行。
+
 ---
 
 ## 权限规则
@@ -133,15 +135,12 @@ handler 的 `type` 除 `command` 外还有 `http`、`mcp_tool`、`prompt`、`age
 }
 ```
 
-`permissionDecision` 取 `"allow"` / `"deny"` / `"ask"`。Stop 事件用的是另一组字段：
+`permissionDecision` 取 `"allow"` / `"deny"` / `"ask"`。Stop 事件用的是 `decision` 和 `reason`：
 
 ```json
 {
-  "hookSpecificOutput": {
-    "hookEventName": "Stop",
-    "decision": "continue",
-    "reason": "测试未全绿，继续修复"
-  }
+  "decision": "block",
+  "reason": "测试未全绿，继续修复"
 }
 ```
 
