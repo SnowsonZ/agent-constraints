@@ -84,7 +84,7 @@ description: 给 coding agent 设置和治理约束——决定一条规则该�
 | 编辑后必须跑检查 | `PostToolUse` hook，matcher `Write\|Edit` |
 | 按内容动态拦截 | `PreToolUse` hook，退出码 2 阻止 |
 | 结束前必须验证通过 | `Stop` hook，退出码 2 阻止结束回合 |
-| 任何进程都不许碰 | 开启 sandbox（权限规则管不到子进程） |
+| 任何进程都不许碰 | 开启 sandbox（权限规则管不到子进程；不要只用 CI 替代这个客户端隔离） |
 
 **最常踩的三个坑**（详见 `LAYER1-ENFORCEMENT.md`）：
 
