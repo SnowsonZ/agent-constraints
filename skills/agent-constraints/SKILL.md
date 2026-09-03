@@ -24,7 +24,7 @@ description: 给 coding agent 设置和治理约束——决定一条规则该�
 
 | 层 | 机制 | 性质 | 详见 |
 |---|---|---|---|
-| **1 执行层** | 执行门：hooks、`permissions.deny`、CI required check、pre-commit；检查器：linter、formatter、类型系统、测试 | 确定性，与模型的决定无关 | `LAYER1-ENFORCEMENT.md` |
+| **1 执行层** | 执行门：hooks、`permissions.deny`、CI required check、pre-commit；检查器：linter、formatter、类型系统、测试 | 执行门确定性；检查器须接入执行门 | `LAYER1-ENFORCEMENT.md` |
 | **2 常驻层** | AGENTS.md / CLAUDE.md | 每会话付费，建议性；单次应用命中 45%–84%，主要看任务类型 | `LAYER2-INSTRUCTIONS.md` |
 | **3 按需层** | Skill、path-scoped rule | 只在相关时进上下文 | `LAYER3-ONDEMAND.md` |
 | **4 会话层** | prompt、plan mode、SPEC.md、`/goal` | 一次性，最灵活 | 本文末尾 |
