@@ -50,7 +50,7 @@ mkdir -p .claude/skills && cp -r skills/agent-constraints .claude/skills/
 
 | 层 | 机制 | 性质 |
 |---|---|---|
-| **1 执行层** | hooks、`permissions.deny`、CI、linter | 确定性，与模型的决定无关 |
+| **1 执行层** | 执行门：hooks、`permissions.deny`、CI required check、pre-commit；检查器：linter、formatter、类型系统、测试 | 确定性，与模型的决定无关 |
 | **2 常驻层** | AGENTS.md / CLAUDE.md | 每会话付费；单次应用命中 45%–84%，主要看任务类型 |
 | **3 按需层** | Skill、path-scoped rule | 只在相关时进上下文 |
 | **4 会话层** | prompt、plan mode、SPEC.md、`/goal` | 一次性 |

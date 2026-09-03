@@ -43,6 +43,20 @@ else
 fi
 [ "$MODE" = 600 ] || fail "log mode must be 600, got $MODE"
 
+: > "$TMP/existing.log"
+chmod 644 "$TMP/existing.log"
+CLAUDE_CONSTRAINTS_LOG="$TMP/existing.log" "$HOOK" <<'EOF'
+{"cwd":"/tmp/project","reason":"logout","session_id":"existing","transcript_path":"/tmp/session.jsonl"}
+EOF
+if MODE=$(stat -f '%OLp' "$TMP/existing.log" 2>/dev/null); then
+  :
+else
+  MODE=$(stat -c '%a' "$TMP/existing.log")
+fi
+[ "$MODE" = 600 ] || fail "existing log mode must be 600, got $MODE"
+[ "$(wc -l < "$TMP/existing.log" | tr -d ' ')" = 1 ] ||
+  fail 'existing log must gain one valid row'
+
 CLAUDE_CONSTRAINTS_LOG="$TMP/invalid.log" "$HOOK" \
   2>"$TMP/invalid.err" <<'EOF'
 not-json
