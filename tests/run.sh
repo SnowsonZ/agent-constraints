@@ -19,6 +19,8 @@ import sys
 document = open(sys.argv[1], encoding="utf-8").read()
 blocks = re.findall(r"```json\s*\n(\{.*?\})\s*\n```", document, re.DOTALL)
 for block in blocks:
+    # 文档里的 json fence 必须是真 JSON。带注释或省略号的示例会在这里炸，
+    # 那是有意的：读者会照抄这些块。
     value = json.loads(block)
     if value.get("decision") == "block" and value.get("reason"):
         break
@@ -27,6 +29,59 @@ else:
 PY
 then
   fail 'Stop hook must document a parseable decision:block JSON object'
+fi
+
+# 四层表存在三份（根 README、skill README、SKILL.md），性质列措辞各有取舍，
+# 但「机制」列必须字字一致——它就是这个技能的结论本身，分叉等于发布两套说法。
+if ! python3 - "$ROOT/README.md" "$SKILL/README.md" "$SKILL/SKILL.md" <<'PY'
+import re
+import sys
+
+LAYERS = ("1 执行层", "2 常驻层", "3 按需层", "4 会话层")
+seen = {}
+for path in sys.argv[1:]:
+    text = open(path, encoding="utf-8").read()
+    for layer in LAYERS:
+        match = re.search(
+            r"^\|\s*\*\*" + re.escape(layer) + r"\*\*\s*\|([^|]*)\|", text, re.M
+        )
+        if not match:
+            print(f"{path}: no row for {layer}", file=sys.stderr)
+            raise SystemExit(1)
+        seen.setdefault(layer, {})[path] = match.group(1).strip()
+
+status = 0
+for layer, by_path in seen.items():
+    if len(set(by_path.values())) > 1:
+        status = 1
+        print(f"{layer} 机制列分叉:", file=sys.stderr)
+        for path, cell in by_path.items():
+            print(f"  {path}: {cell}", file=sys.stderr)
+raise SystemExit(status)
+PY
+then
+  fail 'the four-layer table must agree across all three copies'
+fi
+
+# evals.json 由 skill-creator 的 grader 消费，字段名写错就是静默不生效。
+if ! python3 - "$SKILL/evals/evals.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["skill_name"] == "agent-constraints", data.get("skill_name")
+assert data["evals"], "evals must not be empty"
+ids = []
+for eval_case in data["evals"]:
+    assert set(eval_case) == {
+        "id", "prompt", "expected_output", "files", "expectations"
+    }, sorted(eval_case)
+    assert eval_case["expectations"], f"eval {eval_case['id']} has no expectations"
+    ids.append(eval_case["id"])
+assert len(set(ids)) == len(ids), f"duplicate eval ids: {ids}"
+PY
+then
+  fail 'evals/evals.json must match the skill-creator schema'
 fi
 
 CLAUDE_CONSTRAINTS_LOG="$TMP/valid.log" "$HOOK" <<'EOF'

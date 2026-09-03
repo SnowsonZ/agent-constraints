@@ -135,7 +135,7 @@ handler 的 `type` 除 `command` 外还有 `http`、`mcp_tool`、`prompt`、`age
 }
 ```
 
-`permissionDecision` 取 `"allow"` / `"deny"` / `"ask"`。Stop 事件用的是 `decision` 和 `reason`：
+`permissionDecision` 取 `"allow"` / `"deny"` / `"ask"`。Stop 事件不用 `hookSpecificOutput`，用顶层的 `decision` 和 `reason`：
 
 ```json
 {
@@ -143,6 +143,10 @@ handler 的 `type` 除 `command` 外还有 `http`、`mcp_tool`、`prompt`、`age
   "reason": "测试未全绿，继续修复"
 }
 ```
+
+`decision` 只有 `"block"` 一个有效值，且 `block` 时 `reason` 必填——它是交给 Claude 看的续跑理由。**省略 `decision` 就是放行**，不要写 `"decision": "continue"` 去表达放行，那不是有效值。
+
+另有一条并行的通用字段：顶层 `{"continue": false, "stopReason": "..."}` 让 Claude Code 整个停下来，`stopReason` 是给人看的、不进 Claude 上下文。`continue: false` 优先于 `decision`。两者别混用：要它继续干活用 `decision: "block"`，要它彻底停用 `continue: false`。
 
 退出码与 JSON 的优先级：退出码 2 无条件阻止；退出码 0 且 JSON 合法时由 JSON 决定；**退出码 0 且 JSON 非法或缺失时走正常权限流程，不会自动放行**；超时本身不阻止。
 

@@ -9,11 +9,7 @@
 umask 077
 LOG="${CLAUDE_CONSTRAINTS_LOG:-$HOME/.claude/constraint-review.log}"
 
-if ! LOG_DIR=$(dirname "$LOG"); then
-    printf '%s\n' 'agent-constraints: cannot determine log directory' >&2
-    exit 0
-fi
-if ! mkdir -p "$LOG_DIR"; then
+if ! mkdir -p "$(dirname "$LOG")"; then
     printf '%s\n' 'agent-constraints: cannot create log directory' >&2
     exit 0
 fi
@@ -21,12 +17,16 @@ if ! touch "$LOG"; then
     printf '%s\n' 'agent-constraints: cannot create session log' >&2
     exit 0
 fi
+# 每次都收紧，不只在新建时：已存在的日志可能是更宽的权限建的。
 if ! chmod 600 "$LOG"; then
     printf '%s\n' 'agent-constraints: cannot secure session log' >&2
     exit 0
 fi
 
-if ! python3 -c '
+# 输入错误由内层自己报（退出码 3），外层不再补一条"写入失败"——
+# 那条诊断会把坏输入指成坏磁盘。
+status=0
+python3 -c '
 import datetime
 import json
 import sys
@@ -44,7 +44,7 @@ try:
     event = json.load(sys.stdin)
 except Exception:
     print("agent-constraints: invalid SessionEnd JSON", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(3)
 
 print("\t".join([
     field(datetime.datetime.now().isoformat(timespec="seconds")),
@@ -53,7 +53,9 @@ print("\t".join([
     field(event.get("session_id", "?")),
     field(event.get("transcript_path", "?")),
 ]))
-' >> "$LOG"; then
+' >> "$LOG" || status=$?
+
+if [ "$status" -ne 0 ] && [ "$status" -ne 3 ]; then
     printf '%s\n' 'agent-constraints: cannot write session log' >&2
 fi
 

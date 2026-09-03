@@ -20,10 +20,12 @@
 
 | 层 | 机制 | 性质 |
 |---|---|---|
-| **1 执行层** | hooks、`permissions.deny`、CI、linter | 确定性，与模型的决定无关 |
+| **1 执行层** | 执行门：hooks、`permissions.deny`、CI required check、pre-commit；检查器：linter、formatter、类型系统、测试 | 执行门确定性；检查器须接入执行门 |
 | **2 常驻层** | AGENTS.md / CLAUDE.md | 每会话付费；单次应用命中 45%–84%，主要看任务类型 |
 | **3 按需层** | Skill、path-scoped rule | 只在相关时进上下文 |
-| **4 会话层** | prompt、plan mode、SPEC.md | 一次性 |
+| **4 会话层** | prompt、plan mode、SPEC.md、`/goal` | 一次性 |
+
+**检查器不是执行门。** linter、类型系统、测试单独躺在仓库里对 agent 是零约束力——只有接进 CI required check、pre-commit、`PostToolUse` 或 `Stop` hook，才算第 1 层。
 
 能被第 1 层强制的，绝不放第 2 层——第 2 层会系统性失守：需要反复应用的规则，约 65% 的运行至少违反一次，首次失守通常在第 4 次应用附近。
 
@@ -66,6 +68,16 @@ skills/agent-constraints/
 ```
 
 常规使用只加载 SKILL.md，其余按需展开。
+
+## 维护
+
+```sh
+sh tests/run.sh
+```
+
+契约测试锁住四件会静默漂移的事：hook 的日志格式与权限、`LAYER1-ENFORCEMENT.md` 里 Stop hook 的 JSON 示例可解析、四层表的「机制」列在三份文件里一致、`evals/evals.json` 符合 skill-creator 的 schema。
+
+它接在 push / PR 和发布流水线的第一步。**还差一步只能手工做**：在仓库 Settings → Branch protection 里把 `contracts` 设为 required check，否则它只是会报红的检查器，不是拦得住合并的执行门——这个技能自己的第 1 层定义就是这么划的。
 
 ## 证据基础
 
