@@ -4,7 +4,51 @@ hooks 与权限规则由客户端强制执行，与模型的决定无关。**凡
 
 以下语法均取自 Claude Code 官方文档。其他 agent 的机制不同，不要照搬。
 
-**检查器不是执行门。** linter、formatter、类型系统和测试只有接入 CI required check、pre-commit、PostToolUse 或 Stop hook 后，才构成第 1 层约束。单独存在的配置只能判定结果，不能保证它会被运行。
+**检查器不是执行门。** linter、formatter、类型系统和测试只有接入 CI required check、pre-commit、PostToolUse 或 Stop hook 后，才构成第 1 层约束。单独存在的配置只能判定结果，不能保证它会被运行。怎么接见下一节。
+
+---
+
+## 把检查器接成执行门
+
+检查器（linter / formatter / 类型检查 / 测试）判定结果，门决定它会不会被运行、以及不过时会发生什么。同一个检查器可以接进多道门，**门越晚，反馈越慢但越难绕过**。
+
+| 门 | 什么时候跑 | 绕不绕得过 | 适合 |
+|---|---|---|---|
+| `PostToolUse` hook | 每次 Write/Edit 之后 | agent 绕不过；人手改文件绕得过 | 快的检查：format、lint 单文件、类型检查 |
+| `Stop` hook | agent 想结束回合时 | 连续 8 次阻止后强制结束，**不是绝对保证** | 交付门：全量测试、构建 |
+| pre-commit | `git commit` 时 | `--no-verify` 一个参数就绕过；克隆后不装就不存在 | 提交前的快速拦截，**不能当红线** |
+| CI required check | push / PR 时 | 设为 required 后合不进去，**唯一挡得住人的一道** | 真正的红线 |
+
+**选门的两个判据**：
+
+1. **失败成本**——错误合进主干才发现的代价有多大。代价高的必须有 CI required check 兜底，前面几道只是让反馈来得早一点。
+2. **执行时机**——检查跑多久。秒级的放 `PostToolUse`，分钟级的别放，那会让每次编辑都卡住；放 `Stop` 或 CI。
+
+同一条规则接多道门不是浪费：`PostToolUse` 让 agent 当场自己修，CI required check 保证漏了也进不去。
+
+### pre-commit
+
+`.pre-commit-config.yaml` + `pre-commit install`。**注意它有两个天然缺口**：hook 装在本地 `.git/hooks/`，克隆仓库的人不跑 `install` 就等于没有；`git commit --no-verify` 无条件跳过。所以它是「早点发现」的工具，红线要另外放 CI。
+
+```yaml
+repos:
+  - repo: local
+    hooks:
+      - id: tests
+        name: tests
+        entry: sh tests/run.sh
+        language: system
+        pass_filenames: false
+```
+
+### CI required check
+
+**光有 workflow 不算门。** workflow 跑红了、PR 照样能合，那它还是检查器。要变成门，得在仓库设置里把这个 check 标成 required：
+
+- GitHub：Settings → Branches → Branch protection rule → Require status checks to pass，勾上 job 名（**是 job 名，不是 workflow 名**）
+- 这一步**在 workflow 文件里配不了**，必须在仓库设置或 API 里做。写完 CI 就说"接上执行门了"是这里最常见的错。
+
+给 agent 用的仓库还要注意：workflow 只在 push / PR 时跑，**agent 在本地干的活它一概看不到**。要在会话内就拦住，还得配 `PostToolUse` 或 `Stop` hook。
 
 ---
 
@@ -84,7 +128,7 @@ Read/Edit 的 deny 规则作用于内置文件工具，以及 Claude Code 能识
 | `Stop` | Claude 结束回合时 | **能**（阻止结束，继续对话） |
 | `UserPromptSubmit` | 提交 prompt、Claude 处理前 | — |
 | `SessionStart` | 会话开始或恢复 | — |
-| `InstructionsLoaded` | CLAUDE.md 或 `.claude/rules/*.md` 被加载时 | — |
+| `InstructionsLoaded` | CLAUDE.md 或 `.claude/rules/*.md` 被加载时（`session_start`、`nested_traversal`、`path_glob_match`、`include`、`compact` 五种 reason） | — |
 
 （完整事件表还包括 `PermissionRequest`、`PostToolUseFailure`、`SubagentStop`、`PreCompact`、`SessionEnd` 等，需要时查官方文档。）
 
@@ -144,9 +188,9 @@ handler 的 `type` 除 `command` 外还有 `http`、`mcp_tool`、`prompt`、`age
 }
 ```
 
-`decision` 只有 `"block"` 一个有效值，且 `block` 时 `reason` 必填——它是交给 Claude 看的续跑理由。**省略 `decision` 就是放行**，不要写 `"decision": "continue"` 去表达放行，那不是有效值。
+`decision` 是顶层的遗留字段，取值 `approve` / `block`；`PostToolUse`、`Stop`、`UserPromptSubmit` 用 `"block"`，`block` 时 `reason` 必填——它是交给 Claude 看的续跑理由。**不写 `decision` 就是不阻止**，别写 `"decision": "continue"`，那不是有效值。（`PreToolUse` 上这个字段已废弃，改用 `hookSpecificOutput.permissionDecision`。）
 
-另有一条并行的通用字段：顶层 `{"continue": false, "stopReason": "..."}` 让 Claude Code 整个停下来，`stopReason` 是给人看的、不进 Claude 上下文。`continue: false` 优先于 `decision`。两者别混用：要它继续干活用 `decision: "block"`，要它彻底停用 `continue: false`。
+另有一组并行的通用字段：`continue` 默认 `true`，设成 `false` 让 Claude Code 整个停下来；`stopReason` 是 `continue` 为 false 时展示的信息。两者别混用：要它继续干活用 `decision: "block"`，要它彻底停用 `continue: false`。
 
 退出码与 JSON 的优先级：退出码 2 无条件阻止；退出码 0 且 JSON 合法时由 JSON 决定；**退出码 0 且 JSON 非法或缺失时走正常权限流程，不会自动放行**；超时本身不阻止。
 

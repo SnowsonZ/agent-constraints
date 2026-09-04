@@ -67,8 +67,8 @@
 
 | 工具 | 限制 |
 |---|---|
-| Claude Code | 建议 200 行内；>4 MiB 跳过；块级 HTML 注释注入前被剥离 |
-| Codex | 合并 32 KiB（`project_doc_max_bytes`），**超限即停止发现后续文件** |
+| Claude Code | CLAUDE.md 建议 200 行内；>4 MiB 跳过；块级 HTML 注释注入前被剥离 |
+| Codex | 合并上限默认 32 KiB（`project_doc_max_bytes`），**达到上限即停止继续加入文件** |
 | Copilot | "no longer than 2 pages"；"must not be task specific" |
 
 Anthropic 官方定性：settings 规则"由客户端强制执行，与 Claude 的决定无关"；

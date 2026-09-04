@@ -24,9 +24,9 @@ mkdir -p ~/.claude/skills && cp -r skills/agent-constraints ~/.claude/skills/
 mkdir -p .claude/skills && cp -r skills/agent-constraints .claude/skills/
 ```
 
-验证：**新开一个会话**，输入 `/agent-constraints`。刚装好的技能不在当前会话的技能索引里，改 frontmatter 的 `description` 同理——这两种情况必须新会话。
+验证：**新开一个会话**，输入 `/agent-constraints`。刚装好的技能不在当前会话的技能索引里，调用会报 `Unknown skill`，要等索引刷新才出现。
 
-已注册的技能只改 `SKILL.md` 正文，当前会话重新调用即可加载。但**行为 A/B 一律用新会话**，旧内容留在上下文里会污染对照。
+改过 `SKILL.md` 之后也一样要新会话。正文走一个异步缓存，比磁盘落后一拍——实测改完立刻重调用拿到的是**上一版**内容，中间那次还会回一句 "instructions unchanged"。在旧会话里改一版调一次，你验的不是你刚写的东西。
 
 可选：装上会话记录 hook，为定期复盘留数据。装法见 `hooks/README.md`。
 

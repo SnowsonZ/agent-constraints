@@ -86,6 +86,8 @@ description: 给 coding agent 设置和治理约束——决定一条规则该�
 | 结束前必须验证通过 | `Stop` hook，退出码 2 阻止结束回合 |
 | 任何进程都不许碰 | 开启 sandbox（权限规则管不到子进程；不要只用 CI 替代这个客户端隔离） |
 
+检查器（linter / 类型检查 / 测试）本身不在这张表里——它要先接进一道门才算数。四道门（`PostToolUse` / `Stop` / pre-commit / CI required check）按**执行时机**和**失败成本**怎么选，见 `LAYER1-ENFORCEMENT.md` 的「把检查器接成执行门」。要点：pre-commit 一个 `--no-verify` 就绕过，红线只能靠 CI required check；而 CI 看不到 agent 在本地干的活，会话内要拦还得配 hook。
+
 **最常踩的三个坑**（详见 `LAYER1-ENFORCEMENT.md`）：
 
 1. 文件路径规则只认 `Edit(...)` 和 `Read(...)`。写 `Write(docs/**)` 会被接受但**永不生效**。
@@ -171,7 +173,7 @@ description: 给 coding agent 设置和治理约束——决定一条规则该�
 |---|---|---|
 | 权限规则 | 跑 `claude doctor` 看 resolved settings；启动时的无效设置告警 | 静默失效的规则不会报错，只会告警（见 `LAYER1-ENFORCEMENT.md` 的三个坑） |
 | hook | **实际触发一次匹配的工具调用**，确认它 fire 了 | 退出码语义搞反是最常见错误：`PostToolUse` 阻止不了已执行的调用 |
-| Skill | 新装、或改了 frontmatter `description`：**必须新会话**才进技能索引。只改正文：当前会话重新调用即可 | 拿"刚 cp 完就在本会话调用"当验证是错的；行为 A/B 留在旧会话会污染对照 |
+| Skill | **一律新开会话验证**——新装、改 `description`、改正文都是 | 正文走异步缓存，比磁盘落后一拍：改完立刻重调用拿到的是**上一版**，中间那次还会回 "instructions unchanged"。在旧会话里改一版调一次，验的不是你刚写的东西 |
 | path-scoped rule | 读一个匹配的文件，确认规则进了上下文 | 没有 `paths` 的规则是无条件加载的，等于第 2 层 |
 
 **要求它带回来的是证据,不是结论**：跑了什么命令、输出是什么。「已验证通过」这四个字没有信息量。

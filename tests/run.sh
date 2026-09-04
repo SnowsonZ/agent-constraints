@@ -63,6 +63,29 @@ then
   fail 'the four-layer table must agree across all three copies'
 fi
 
+# SKILL.md 重载语义在三处文件里各说一次，v0.1.4 曾经改了两处漏一处，两套说法并存。
+# 实测结论是「一律新开会话」：正文走异步缓存，比磁盘落后一拍。
+# 这里既正向要求三处都说新会话，也反向禁掉那个被实测推翻的说法。
+if ! python3 - "$SKILL/README.md" "$SKILL/SKILL.md" "$SKILL/LAYER3-ONDEMAND.md" <<'PY'
+import sys
+
+DISPROVEN = ("重新调用即可", "重新调用可加载", "当前会话重新调用")
+status = 0
+for path in sys.argv[1:]:
+    text = open(path, encoding="utf-8").read()
+    if "新会话" not in text and "新开会话" not in text and "新开一个会话" not in text:
+        print(f"{path}: 没有要求新会话验证 Skill 改动", file=sys.stderr)
+        status = 1
+    for phrase in DISPROVEN:
+        if phrase in text:
+            print(f"{path}: 含被实测推翻的说法 {phrase!r}", file=sys.stderr)
+            status = 1
+raise SystemExit(status)
+PY
+then
+  fail 'skill reload semantics must say "new session" in all three files'
+fi
+
 # evals.json 由 skill-creator 的 grader 消费，字段名写错就是静默不生效。
 if ! python3 - "$SKILL/evals/evals.json" <<'PY'
 import json
